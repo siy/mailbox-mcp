@@ -3,6 +3,32 @@ name = "mailbox-mcp"
 version = "0.1.0"
 edition = "2021"
 description = "A minimalistic MCP server for agent-to-agent communication"
+license = "Apache-2.0"
+repository = "https://github.com/siy/mailbox-mcp"
+authors = ["Sergiy Yevtushenko <sergiy.yevtushenko@gmail.com>"]
+
+[package.metadata.generate-rpm]
+summary = "Minimalistic MCP server for agent-to-agent communication"
+license = "Apache-2.0"
+group = "Development/Tools"
+url = "https://github.com/siy/mailbox-mcp"
+assets = [
+    { source = "target/release/mailbox-mcp", dest = "/usr/bin/mailbox-mcp", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/mailbox-mcp/README.md", mode = "644" }
+]
+
+[package.metadata.deb]
+maintainer = "Sergiy Yevtushenko <sergiy.yevtushenko@gmail.com>"
+copyright = "2025, Sergiy Yevtushenko <sergiy.yevtushenko@gmail.com>"
+license-file = ["LICENSE"]
+extended-description = "A minimalistic MCP server for agent-to-agent communication. Provides message queues and shared context for coordinating multiple AI agents."
+depends = "$auto"
+section = "utility"
+priority = "optional"
+assets = [
+    ["target/release/mailbox-mcp", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/mailbox-mcp/", "644"],
+]
 
 [dependencies]
 rmcp = { version = "0.12", features = ["server", "macros", "transport-streamable-http-server"] }

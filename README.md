@@ -12,6 +12,28 @@ A minimalistic MCP (Model Context Protocol) server for agent-to-agent communicat
 
 ## Installation
 
+### Quick Install (Recommended)
+
+**Linux/macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/siy/mailbox-mcp/master/scripts/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+iwr -useb https://raw.githubusercontent.com/siy/mailbox-mcp/master/scripts/install.ps1 | iex
+```
+
+### Upgrade to Latest Version
+
+```bash
+mailbox-mcp --upgrade
+```
+
+### From GitHub Releases
+
+Download the appropriate binary for your platform from the [Releases](https://github.com/siy/mailbox-mcp/releases) page.
+
 ### From Source
 
 ```bash
@@ -26,13 +48,19 @@ The binary will be at `./target/release/mailbox-mcp`.
 
 ```bash
 # Start with default settings (port 3000)
-./mailbox-mcp
+mailbox-mcp
 
 # Custom port
-./mailbox-mcp --port 8080
+mailbox-mcp --port 8080
 
 # Custom host binding
-./mailbox-mcp --host 0.0.0.0 --port 3000
+mailbox-mcp --host 0.0.0.0 --port 3000
+
+# Show version
+mailbox-mcp --version
+
+# Upgrade to latest version
+mailbox-mcp --upgrade
 ```
 
 ## MCP Tools
