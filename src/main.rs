@@ -1,75 +1,59 @@
 use clap::Parser;
 use mailbox_mcp::{Database, MailboxServer};
 use rmcp::transport::streamable_http_server::{
-    session::local::LocalSessionManager, StreamableHttpService,
+    session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
+use tokio::signal;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-#[cfg(unix)]
-const INSTALL_SCRIPT_URL: &str =
-    "https://raw.githubusercontent.com/siy/mailbox-mcp/master/scripts/install.sh";
-#[cfg(windows)]
-const INSTALL_SCRIPT_URL_WINDOWS: &str =
-    "https://raw.githubusercontent.com/siy/mailbox-mcp/master/scripts/install.ps1";
+/// Local-only MCP server bound to 127.0.0.1
+const HOST: &str = "127.0.0.1";
 
 #[derive(Parser)]
 #[command(name = "mailbox-mcp")]
-#[command(about = "A minimalistic MCP server for agent-to-agent communication")]
+#[command(about = "A minimalistic MCP server for agent-to-agent communication (local-only)")]
 #[command(version)]
 struct Args {
     /// Port to listen on
     #[arg(short, long, default_value = "3000")]
     port: u16,
-
-    /// Host to bind to
-    #[arg(long, default_value = "127.0.0.1")]
-    host: String,
-
-    /// Upgrade to the latest version
-    #[arg(long)]
-    upgrade: bool,
 }
 
-fn upgrade() -> anyhow::Result<()> {
-    println!("Upgrading mailbox-mcp to the latest version...");
+async fn shutdown_signal() {
+    // Gracefully handle signal installation failures
+    let ctrl_c = async {
+        if let Err(e) = signal::ctrl_c().await {
+            tracing::warn!("Failed to listen for Ctrl+C: {e}");
+        }
+    };
 
     #[cfg(unix)]
-    {
-        use std::process::Command;
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg(format!("curl -fsSL {} | sh", INSTALL_SCRIPT_URL))
-            .status()?;
-
-        if !status.success() {
-            anyhow::bail!("Upgrade failed");
+    let terminate = async {
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                tracing::warn!("Failed to listen for SIGTERM: {e}");
+                std::future::pending::<()>().await;
+            }
         }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
     }
 
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        let status = Command::new("powershell")
-            .arg("-Command")
-            .arg(format!("iwr -useb {} | iex", INSTALL_SCRIPT_URL_WINDOWS))
-            .status()?;
-
-        if !status.success() {
-            anyhow::bail!("Upgrade failed");
-        }
-    }
-
-    println!("Upgrade complete. Please restart the server.");
-    Ok(())
+    tracing::info!("Shutdown signal received, stopping server...");
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-
-    if args.upgrade {
-        return upgrade();
-    }
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
@@ -81,16 +65,19 @@ async fn main() -> anyhow::Result<()> {
     let service = StreamableHttpService::new(
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),
-        Default::default(),
+        StreamableHttpServerConfig::default(),
     );
 
     let app = axum::Router::new().nest_service("/mcp", service);
-    let addr = format!("{}:{}", args.host, args.port);
+    let addr = format!("{HOST}:{}", args.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     tracing::info!("Mailbox MCP server listening on http://{}/mcp", addr);
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
+    tracing::info!("Server stopped");
     Ok(())
 }

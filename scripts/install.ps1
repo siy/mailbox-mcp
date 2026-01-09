@@ -59,33 +59,40 @@ function Install-MailboxMcp {
             New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
         }
 
+        # Find binary - may be at root or in subdirectory
         $binaryPath = Join-Path $tempDir "$BinaryName.exe"
-        $destPath = Join-Path $InstallDir "$BinaryName.exe"
-
-        if (Test-Path $destPath) {
-            $overwrite = Read-Host "Binary already exists. Overwrite? (y/N)"
-            if ($overwrite -ne "y" -and $overwrite -ne "Y") {
-                Write-Host "Installation cancelled."
-                exit 0
+        if (-not (Test-Path $binaryPath)) {
+            $subDirPath = Join-Path $tempDir "$BinaryName-$target" "$BinaryName.exe"
+            if (Test-Path $subDirPath) {
+                $binaryPath = $subDirPath
+            } else {
+                # Find it anywhere in extracted directory
+                $foundBinary = Get-ChildItem -Path $tempDir -Recurse -Filter "$BinaryName.exe" | Select-Object -First 1
+                if ($foundBinary) {
+                    $binaryPath = $foundBinary.FullName
+                } else {
+                    Write-Error "Could not find $BinaryName.exe in archive"
+                    exit 1
+                }
             }
         }
 
+        $destPath = Join-Path $InstallDir "$BinaryName.exe"
+
+        # Overwrite existing binary without prompting
         Copy-Item -Path $binaryPath -Destination $destPath -Force
 
         Write-Host ""
         Write-Host "Successfully installed $BinaryName $version to $destPath"
 
-        # Check if install dir is in PATH
+        # Check if install dir is in PATH and add it automatically
         $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
         if ($currentPath -notlike "*$InstallDir*") {
+            $newPath = "$InstallDir;$currentPath"
+            [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
             Write-Host ""
-            Write-Host "Warning: $InstallDir is not in your PATH."
-            $addToPath = Read-Host "Add to PATH? (Y/n)"
-            if ($addToPath -ne "n" -and $addToPath -ne "N") {
-                $newPath = "$InstallDir;$currentPath"
-                [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
-                Write-Host "Added to PATH. Restart your terminal for changes to take effect."
-            }
+            Write-Host "Added $InstallDir to PATH."
+            Write-Host "Restart your terminal for changes to take effect."
         }
     }
     finally {

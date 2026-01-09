@@ -24,12 +24,6 @@ curl -fsSL https://raw.githubusercontent.com/siy/mailbox-mcp/master/scripts/inst
 iwr -useb https://raw.githubusercontent.com/siy/mailbox-mcp/master/scripts/install.ps1 | iex
 ```
 
-### Upgrade to Latest Version
-
-```bash
-mailbox-mcp --upgrade
-```
-
 ### From GitHub Releases
 
 Download the appropriate binary for your platform from the [Releases](https://github.com/siy/mailbox-mcp/releases) page.
@@ -47,21 +41,17 @@ The binary will be at `./target/release/mailbox-mcp`.
 ## Usage
 
 ```bash
-# Start with default settings (port 3000)
+# Start with default settings (port 3000, localhost only)
 mailbox-mcp
 
 # Custom port
 mailbox-mcp --port 8080
 
-# Custom host binding
-mailbox-mcp --host 0.0.0.0 --port 3000
-
 # Show version
 mailbox-mcp --version
-
-# Upgrade to latest version
-mailbox-mcp --upgrade
 ```
+
+> **Note:** The server is intentionally hardcoded to bind to `127.0.0.1` (localhost) only. This is a local-only service and should never be exposed to the network.
 
 ## MCP Tools
 
@@ -78,7 +68,7 @@ mailbox-mcp --upgrade
 
 | Tool | Parameters | Description |
 |------|------------|-------------|
-| `send_message` | `project_id`, `to_agent`, `content`, `from_agent?`, `reference_id?` | Send message, returns `message_id` |
+| `send_message` | `project_id`, `to_agent`, `content`, `from_agent?` (default: "anonymous"), `reference_id?` | Send message, returns `message_id` |
 | `receive_messages` | `project_id`, `agent_id`, `limit?` | Get and consume messages |
 | `peek_messages` | `project_id`, `agent_id`, `limit?` | View without consuming |
 | `delete_message` | `message_id` | Delete specific message |
@@ -87,13 +77,15 @@ mailbox-mcp --upgrade
 
 ```json
 {
-  "id": "uuid",
-  "reference_id": "optional-uuid",
+  "id": "123",
+  "reference_id": "122",
   "from_agent": "sender",
   "content": "message body",
   "created_at": "2025-01-08T12:00:00Z"
 }
 ```
+
+> **Note:** Message IDs are auto-incrementing integers (as strings). Reference IDs link responses to original requests.
 
 ## Configuration
 
@@ -114,8 +106,9 @@ Add to your Claude Code MCP settings (`~/.claude/settings.json`):
 
 ### Data Storage
 
-- Database: `~/.local/share/mailbox-mcp/mailbox.db` (Linux)
-- Database: `~/Library/Application Support/mailbox-mcp/mailbox.db` (macOS)
+- **Linux:** `~/.local/share/mailbox-mcp/mailbox.db`
+- **macOS:** `~/Library/Application Support/mailbox-mcp/mailbox.db`
+- **Windows:** `%APPDATA%\mailbox-mcp\mailbox.db`
 
 ## Example: Agent Communication
 
@@ -127,7 +120,7 @@ send_message(
   from_agent: "feature-developer",
   content: "Need Option::tap() method added to support fluent API"
 )
-# Returns: {"message_id": "abc-123"}
+# Returns: {"message_id": "1"}
 ```
 
 **Agent B** receives and responds:
@@ -140,7 +133,7 @@ send_message(
   to_agent: "feature-developer",
   from_agent: "library-maintainer",
   content: "Added Option::tap() in v1.2.0",
-  reference_id: "abc-123"  # Links to original request
+  reference_id: "1"  # Links to original request
 )
 ```
 

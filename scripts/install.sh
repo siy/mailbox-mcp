@@ -92,7 +92,21 @@ install() {
 
     echo "Installing to ${INSTALL_DIR}..."
     mkdir -p "$INSTALL_DIR"
-    mv "${tmp_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+
+    # Find binary - may be at root or in subdirectory
+    if [ -f "${tmp_dir}/${BINARY_NAME}" ]; then
+        mv "${tmp_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+    elif [ -f "${tmp_dir}/${BINARY_NAME}-${target}/${BINARY_NAME}" ]; then
+        mv "${tmp_dir}/${BINARY_NAME}-${target}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+    else
+        # Find it anywhere in extracted directory
+        binary_path=$(find "$tmp_dir" -name "$BINARY_NAME" -type f | head -1)
+        if [ -z "$binary_path" ]; then
+            echo "Error: Could not find ${BINARY_NAME} in archive" >&2
+            exit 1
+        fi
+        mv "$binary_path" "${INSTALL_DIR}/${BINARY_NAME}"
+    fi
     chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 
     echo ""
