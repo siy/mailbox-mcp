@@ -1,11 +1,11 @@
 //! # mailbox-mcp
 //!
-//! A minimalistic MCP (Model Context Protocol) server for agent-to-agent communication.
+//! A minimalistic MCP server for agent-to-agent communication via pub-sub.
 //!
 //! ## Features
 //!
-//! - **Message Queues**: Per-agent message queues with request/response linking
-//! - **Shared Context**: Global and project-scoped key-value stores
+//! - **Pub-sub messaging**: Topics with per-consumer read tracking
+//! - **Shared context**: Global and project-scoped key-value stores
 //! - **Persistence**: Messages and context survive server restarts
 //!
 //! ## Usage

@@ -1,16 +1,16 @@
 //! Database layer for mailbox-mcp.
 //!
-//! Provides SQLite-backed storage for context key-value pairs and message queues.
+//! Provides SQLite-backed storage for context key-value pairs and pub-sub messaging.
 
 use rusqlite::{params, Connection, Result as SqliteResult};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
-/// Maximum allowed size for message content (1MB = 1,048,576 bytes).
+/// Maximum allowed size for message content (1MB).
 pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 
-/// Maximum allowed size for context values (64KB = 65,536 bytes).
+/// Maximum allowed size for context values (64KB).
 pub const MAX_CONTEXT_VALUE_SIZE: usize = 64 * 1024;
 
 /// Maximum number of messages to retrieve in a single query.
@@ -19,49 +19,33 @@ pub const MAX_MESSAGE_LIMIT: u32 = 500;
 /// Errors that can occur during database operations.
 #[derive(Error, Debug)]
 pub enum DbError {
-    /// Database operation failed.
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
-    /// IO error during database operations.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Content exceeds maximum allowed size.
     #[error("Content too large: {size} bytes exceeds limit of {limit} bytes")]
     ContentTooLarge { size: usize, limit: usize },
 
-    /// Required field is empty.
     #[error("Required field '{field}' cannot be empty")]
     EmptyField { field: &'static str },
-
-    /// Invalid message ID format.
-    #[error("Invalid message ID: '{id}' (must be a numeric ID)")]
-    InvalidMessageId { id: String },
 }
 
-/// Result type for database operations.
 pub type DbResult<T> = Result<T, DbError>;
 
-/// A message in an agent's queue.
+/// A message in a topic.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Message {
-    /// Unique message identifier.
     pub id: String,
-    /// Agent that sent this message.
+    pub topic: String,
     pub from_agent: String,
-    /// Optional reference to a previous message (for request/response linking).
     pub reference_id: Option<String>,
-    /// Message content.
     pub content: String,
-    /// Timestamp when the message was created (ISO 8601 format: `2025-01-08T12:00:00Z`).
     pub created_at: String,
 }
 
 /// Thread-safe database handle.
-///
-/// All operations are serialized through an internal mutex. This is appropriate
-/// for local-only use with low concurrency.
 #[derive(Clone)]
 pub struct Database {
     conn: Arc<Mutex<Connection>>,
@@ -70,20 +54,12 @@ pub struct Database {
 #[allow(clippy::missing_errors_doc)]
 impl Database {
     /// Creates a new database connection using the platform-specific default path.
-    ///
-    /// The database file is stored in the user's application data directory:
-    /// - Linux: `~/.local/share/mailbox-mcp/mailbox.db`
-    /// - macOS: `~/Library/Application Support/mailbox-mcp/mailbox.db`
-    /// - Windows: `%APPDATA%\mailbox-mcp\mailbox.db`
     pub fn new() -> DbResult<Self> {
         let path = Self::default_path()?;
         Self::open(&path)
     }
 
     /// Opens a database at the specified path.
-    ///
-    /// Creates the parent directory if it doesn't exist.
-    /// Runs migrations to ensure the schema is up to date.
     pub fn open(path: &Path) -> DbResult<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -123,7 +99,7 @@ impl Database {
         self.with_conn(|conn| {
             conn.execute_batch(
                 r"
-                -- Unified context table (project_id NULL = global)
+                -- Context table (unchanged)
                 CREATE TABLE IF NOT EXISTS context (
                     project_id TEXT,
                     key TEXT NOT NULL,
@@ -131,19 +107,27 @@ impl Database {
                     PRIMARY KEY (project_id, key)
                 );
 
-                -- Message queue
+                -- Messages with topic-based addressing
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_id TEXT NOT NULL,
-                    to_agent TEXT NOT NULL,
+                    topic TEXT NOT NULL,
                     from_agent TEXT NOT NULL,
                     reference_id TEXT,
                     content TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_messages_queue
-                    ON messages(project_id, to_agent, created_at);
+                CREATE INDEX IF NOT EXISTS idx_messages_topic
+                    ON messages(topic, created_at);
+
+                -- Read markers for per-consumer tracking
+                CREATE TABLE IF NOT EXISTS read_markers (
+                    topic TEXT NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    consumer TEXT NOT NULL,
+                    read_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                    PRIMARY KEY (topic, message_id, consumer)
+                );
                 ",
             )?;
             Ok(())
@@ -162,17 +146,9 @@ impl Database {
     }
 
     // -------------------------------------------------------------------------
-    // Context operations
+    // Context operations (unchanged)
     // -------------------------------------------------------------------------
 
-    /// Sets a context value.
-    ///
-    /// If `project_id` is `None`, sets a global context value.
-    /// If `project_id` is `Some`, sets a project-scoped context value.
-    ///
-    /// # Errors
-    /// - `EmptyField` if key is empty
-    /// - `ContentTooLarge` if value exceeds 65,536 bytes
     pub fn context_set(&self, project_id: Option<&str>, key: &str, value: &str) -> DbResult<()> {
         let key = key.trim();
         if key.is_empty() {
@@ -196,9 +172,6 @@ impl Database {
         })
     }
 
-    /// Gets a context value.
-    ///
-    /// Returns `Ok(Some(value))` if the key exists, `Ok(None)` if it doesn't.
     pub fn context_get(&self, project_id: Option<&str>, key: &str) -> DbResult<Option<String>> {
         self.with_conn(|conn| {
             let mut stmt =
@@ -212,9 +185,6 @@ impl Database {
         })
     }
 
-    /// Deletes a context value.
-    ///
-    /// Returns `true` if a value was deleted, `false` if the key didn't exist.
     pub fn context_delete(&self, project_id: Option<&str>, key: &str) -> DbResult<bool> {
         self.with_conn(|conn| {
             let rows = conn.execute(
@@ -225,10 +195,6 @@ impl Database {
         })
     }
 
-    /// Lists all context keys.
-    ///
-    /// If `project_id` is `None`, lists global context keys.
-    /// If `project_id` is `Some`, lists project-scoped context keys.
     pub fn context_list(&self, project_id: Option<&str>) -> DbResult<Vec<String>> {
         self.with_conn(|conn| {
             let mut stmt =
@@ -241,38 +207,27 @@ impl Database {
     }
 
     // -------------------------------------------------------------------------
-    // Message operations
+    // Pub-sub operations
     // -------------------------------------------------------------------------
 
-    /// Sends a message to an agent's queue.
-    ///
-    /// Returns the message ID.
-    ///
-    /// # Errors
-    /// - `EmptyField` if `project_id` or `to_agent` is empty (Note: `from_agent` is validated
-    ///   at the API layer, which defaults empty values to "anonymous")
-    /// - `ContentTooLarge` if content exceeds 1,048,576 bytes
-    pub fn send_message(
+    /// Publishes a message to a topic. Returns the message ID.
+    pub fn publish(
         &self,
-        project_id: &str,
-        to_agent: &str,
+        topic: &str,
         from_agent: &str,
         content: &str,
         reference_id: Option<&str>,
     ) -> DbResult<String> {
-        if project_id.trim().is_empty() {
-            return Err(DbError::EmptyField {
-                field: "project_id",
-            });
+        let topic = topic.trim();
+        if topic.is_empty() {
+            return Err(DbError::EmptyField { field: "topic" });
         }
-        if to_agent.trim().is_empty() {
-            return Err(DbError::EmptyField { field: "to_agent" });
-        }
-        if from_agent.trim().is_empty() {
-            return Err(DbError::EmptyField {
-                field: "from_agent",
-            });
-        }
+        let from_agent = from_agent.trim();
+        let from_agent = if from_agent.is_empty() {
+            "anonymous"
+        } else {
+            from_agent
+        };
         if content.len() > MAX_MESSAGE_SIZE {
             return Err(DbError::ContentTooLarge {
                 size: content.len(),
@@ -282,105 +237,136 @@ impl Database {
 
         self.with_conn(|conn| {
             conn.execute(
-                r"INSERT INTO messages (project_id, to_agent, from_agent, reference_id, content)
-                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![project_id, to_agent, from_agent, reference_id, content],
+                r"INSERT INTO messages (topic, from_agent, reference_id, content)
+                  VALUES (?1, ?2, ?3, ?4)",
+                params![topic, from_agent, reference_id, content],
             )?;
             Ok(conn.last_insert_rowid().to_string())
         })
     }
 
-    /// Retrieves and consumes messages from an agent's queue.
-    ///
-    /// Messages are returned in chronological order and deleted from the queue.
-    /// Use [`peek_messages`](Self::peek_messages) to view without consuming.
-    ///
-    /// Limit is capped at [`MAX_MESSAGE_LIMIT`] (500).
-    pub fn receive_messages(
+    /// Receives unread messages for a consumer, marking them as read.
+    pub fn receive(
         &self,
-        project_id: &str,
-        agent_id: &str,
+        topic: &str,
+        consumer: &str,
         limit: Option<u32>,
     ) -> DbResult<Vec<Message>> {
         let limit = limit.unwrap_or(100).min(MAX_MESSAGE_LIMIT);
+        let topic = topic.trim();
+        let consumer = consumer.trim();
+
+        if consumer.is_empty() {
+            return Err(DbError::EmptyField { field: "consumer" });
+        }
 
         self.with_conn(|conn| {
-            let messages = Self::query_messages(conn, project_id, agent_id, limit)?;
+            // Get unread messages
+            let mut stmt = conn.prepare(
+                r"SELECT m.id, m.topic, m.from_agent, m.reference_id, m.content, m.created_at
+                  FROM messages m
+                  WHERE m.topic = ?1
+                    AND NOT EXISTS (
+                        SELECT 1 FROM read_markers r
+                        WHERE r.topic = m.topic AND r.message_id = m.id AND r.consumer = ?2
+                    )
+                  ORDER BY m.created_at ASC
+                  LIMIT ?3",
+            )?;
 
-            // Delete consumed messages in a single statement
+            let messages: Vec<Message> = stmt
+                .query_map(params![topic, consumer, limit], |row| {
+                    Ok(Message {
+                        id: row.get::<_, i64>(0)?.to_string(),
+                        topic: row.get(1)?,
+                        from_agent: row.get(2)?,
+                        reference_id: row.get(3)?,
+                        content: row.get(4)?,
+                        created_at: row.get(5)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            // Mark as read
             if !messages.is_empty() {
-                let ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
-                let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-                let sql = format!("DELETE FROM messages WHERE id IN ({placeholders})");
-                let mut stmt = conn.prepare(&sql)?;
-                for (i, id) in ids.iter().enumerate() {
-                    stmt.raw_bind_parameter(i + 1, id)?;
+                let mut insert_stmt = conn.prepare(
+                    r"INSERT OR IGNORE INTO read_markers (topic, message_id, consumer)
+                      VALUES (?1, ?2, ?3)",
+                )?;
+                for msg in &messages {
+                    insert_stmt.execute(params![
+                        topic,
+                        msg.id.parse::<i64>().unwrap(),
+                        consumer
+                    ])?;
                 }
-                stmt.raw_execute()?;
             }
 
             Ok(messages)
         })
     }
 
-    /// Peeks at messages in an agent's queue without consuming them.
-    ///
-    /// Messages are returned in chronological order but remain in the queue.
-    ///
-    /// Limit is capped at [`MAX_MESSAGE_LIMIT`] (500).
-    pub fn peek_messages(
-        &self,
-        project_id: &str,
-        agent_id: &str,
-        limit: Option<u32>,
-    ) -> DbResult<Vec<Message>> {
+    /// Peeks at recent messages without consumer tracking.
+    pub fn peek(&self, topic: &str, limit: Option<u32>) -> DbResult<Vec<Message>> {
         let limit = limit.unwrap_or(100).min(MAX_MESSAGE_LIMIT);
+        let topic = topic.trim();
 
-        self.with_conn(|conn| Self::query_messages(conn, project_id, agent_id, limit))
-    }
-
-    fn query_messages(
-        conn: &Connection,
-        project_id: &str,
-        agent_id: &str,
-        limit: u32,
-    ) -> SqliteResult<Vec<Message>> {
-        let mut stmt = conn.prepare(
-            r"SELECT id, from_agent, reference_id, content, created_at
-              FROM messages
-              WHERE project_id = ?1 AND to_agent = ?2
-              ORDER BY created_at ASC
-              LIMIT ?3",
-        )?;
-
-        let messages = stmt
-            .query_map(params![project_id, agent_id, limit], |row| {
-                Ok(Message {
-                    id: row.get::<_, i64>(0)?.to_string(),
-                    from_agent: row.get(1)?,
-                    reference_id: row.get(2)?,
-                    content: row.get(3)?,
-                    created_at: row.get(4)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(messages)
-    }
-
-    /// Deletes a specific message by ID.
-    ///
-    /// Returns `true` if the message was deleted, `false` if it didn't exist.
-    ///
-    /// # Errors
-    /// - `InvalidMessageId` if the message ID is not a valid numeric ID
-    pub fn delete_message(&self, message_id: &str) -> DbResult<bool> {
-        let id: i64 = message_id.parse().map_err(|_| DbError::InvalidMessageId {
-            id: message_id.to_string(),
-        })?;
         self.with_conn(|conn| {
-            let rows = conn.execute("DELETE FROM messages WHERE id = ?1", params![id])?;
-            Ok(rows > 0)
+            let mut stmt = conn.prepare(
+                r"SELECT id, topic, from_agent, reference_id, content, created_at
+                  FROM messages
+                  WHERE topic = ?1
+                  ORDER BY created_at DESC
+                  LIMIT ?2",
+            )?;
+
+            let messages = stmt
+                .query_map(params![topic, limit], |row| {
+                    Ok(Message {
+                        id: row.get::<_, i64>(0)?.to_string(),
+                        topic: row.get(1)?,
+                        from_agent: row.get(2)?,
+                        reference_id: row.get(3)?,
+                        content: row.get(4)?,
+                        created_at: row.get(5)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(messages)
+        })
+    }
+
+    /// Lists all topics that have messages.
+    pub fn list_topics(&self) -> DbResult<Vec<String>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(r"SELECT DISTINCT topic FROM messages ORDER BY topic")?;
+            let topics = stmt
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<Vec<String>, _>>()?;
+            Ok(topics)
+        })
+    }
+
+    /// Cleans up messages older than the specified number of hours.
+    pub fn cleanup(&self, older_than_hours: u32) -> DbResult<u64> {
+        self.with_conn(|conn| {
+            // Delete read markers for old messages
+            conn.execute(
+                r"DELETE FROM read_markers WHERE message_id IN (
+                    SELECT id FROM messages
+                    WHERE created_at < datetime('now', ?1)
+                )",
+                params![format!("-{} hours", older_than_hours)],
+            )?;
+
+            // Delete old messages
+            let deleted = conn.execute(
+                r"DELETE FROM messages WHERE created_at < datetime('now', ?1)",
+                params![format!("-{} hours", older_than_hours)],
+            )?;
+
+            Ok(deleted as u64)
         })
     }
 }
