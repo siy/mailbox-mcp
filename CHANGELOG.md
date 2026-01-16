@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `receive` - Get unread messages, mark as read for this consumer
 - `peek` - View messages without marking read
 - `list_topics` - List all topics with messages
+- Design documentation in README (schema, delivery semantics, limits)
+- Updated CLAUDE.md with architecture details and data model
 
 ## [0.1.1] - 2026-01-15
 

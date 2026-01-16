@@ -129,6 +129,57 @@ Add to `~/.claude/settings.json`:
 - **macOS:** `~/Library/Application Support/mailbox-mcp/mailbox.db`
 - **Windows:** `%APPDATA%\mailbox-mcp\mailbox.db`
 
+## Design
+
+### Why Pub-sub?
+
+Traditional message queues (agent A → agent B) require knowing recipients upfront. Pub-sub decouples publishers from consumers:
+
+- **Publishers** don't need to know who will read
+- **Consumers** can start/stop reading anytime
+- **Multiple consumers** can independently track their read position
+- **Topics** provide natural namespacing (e.g., `releases/project-name`)
+
+### At-least-once Delivery
+
+Messages persist until cleanup. The `receive` operation:
+1. Queries messages NOT in `read_markers` for this consumer
+2. Returns messages
+3. Inserts read markers atomically
+
+If a consumer crashes after receiving but before processing, it will see the message again on restart (at-least-once semantics).
+
+### Schema
+
+```sql
+-- Messages with topic-based addressing
+CREATE TABLE messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic TEXT NOT NULL,
+    from_agent TEXT NOT NULL,
+    reference_id TEXT,
+    content TEXT NOT NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+-- Per-consumer read tracking
+CREATE TABLE read_markers (
+    topic TEXT NOT NULL,
+    message_id INTEGER NOT NULL,
+    consumer TEXT NOT NULL,
+    read_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (topic, message_id, consumer)
+);
+```
+
+### Limits
+
+| Resource | Limit |
+|----------|-------|
+| Message content | 1 MB |
+| Context value | 64 KB |
+| Messages per query | 500 |
+
 ## License
 
 Apache License 2.0
