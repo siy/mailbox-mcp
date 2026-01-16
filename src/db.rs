@@ -294,7 +294,11 @@ impl Database {
                       VALUES (?1, ?2, ?3)",
                 )?;
                 for msg in &messages {
-                    insert_stmt.execute(params![topic, msg.id.parse::<i64>().unwrap(), consumer])?;
+                    insert_stmt.execute(params![
+                        topic,
+                        msg.id.parse::<i64>().unwrap(),
+                        consumer
+                    ])?;
                 }
             }
 
@@ -336,9 +340,7 @@ impl Database {
     /// Lists all topics that have messages.
     pub fn list_topics(&self) -> DbResult<Vec<String>> {
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                r"SELECT DISTINCT topic FROM messages ORDER BY topic",
-            )?;
+            let mut stmt = conn.prepare(r"SELECT DISTINCT topic FROM messages ORDER BY topic")?;
             let topics = stmt
                 .query_map([], |row| row.get(0))?
                 .collect::<Result<Vec<String>, _>>()?;

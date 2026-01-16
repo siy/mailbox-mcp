@@ -133,7 +133,9 @@ impl MailboxServer {
         Ok(json_response(&json!({ "ok": true })))
     }
 
-    #[tool(description = "Get a context value. Returns {\"found\": true, \"value\": \"...\"} or {\"found\": false}.")]
+    #[tool(
+        description = "Get a context value. Returns {\"found\": true, \"value\": \"...\"} or {\"found\": false}."
+    )]
     async fn context_get(
         &self,
         Parameters(params): Parameters<ContextGetParams>,
@@ -178,7 +180,9 @@ impl MailboxServer {
     // Pub-sub operations
     // -------------------------------------------------------------------------
 
-    #[tool(description = "Publish a message to a topic. Returns {\"message_id\": \"...\"}. Topics can be anything: \"releases/project\", \"mailbox/agent\", etc.")]
+    #[tool(
+        description = "Publish a message to a topic. Returns {\"message_id\": \"...\"}. Topics can be anything: \"releases/project\", \"mailbox/agent\", etc."
+    )]
     async fn publish(
         &self,
         Parameters(params): Parameters<PublishParams>,
@@ -196,7 +200,9 @@ impl MailboxServer {
         Ok(json_response(&json!({ "message_id": message_id })))
     }
 
-    #[tool(description = "Receive unread messages from a topic. Messages are marked as read for this consumer. Returns {\"messages\": [...]}.")]
+    #[tool(
+        description = "Receive unread messages from a topic. Messages are marked as read for this consumer. Returns {\"messages\": [...]}."
+    )]
     async fn receive(
         &self,
         Parameters(params): Parameters<ReceiveParams>,
@@ -208,7 +214,9 @@ impl MailboxServer {
         Ok(messages_response(&messages))
     }
 
-    #[tool(description = "Peek at recent messages in a topic without marking as read. Returns {\"messages\": [...]}.")]
+    #[tool(
+        description = "Peek at recent messages in a topic without marking as read. Returns {\"messages\": [...]}."
+    )]
     async fn peek(
         &self,
         Parameters(params): Parameters<PeekParams>,
@@ -237,7 +245,9 @@ impl ServerHandler for MailboxServer {
             protocol_version: ProtocolVersion::V_2024_11_05,
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("Mailbox MCP server for agent communication via pub-sub".to_string()),
+            instructions: Some(
+                "Mailbox MCP server for agent communication via pub-sub".to_string(),
+            ),
         }
     }
 }
